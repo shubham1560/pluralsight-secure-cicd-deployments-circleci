@@ -1,0 +1,81 @@
+version: 2.1
+
+orbs:
+  aws-cli: circleci/aws-cli@5.1.2
+
+jobs:
+  test:
+    docker:
+      - image: cimg/node:20.11
+    steps:
+      - checkout
+      - run: node --test test.js
+      - run:
+          name: Confirm this job has no AWS credentials
+          command: |
+            if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
+              echo "FAIL: test can see AWS_ACCESS_KEY_ID. Keep keys in contexts, not project env vars."
+              exit 1
+            fi
+            echo "PASS: test has no AWS keys"
+
+  deploy:
+    parameters:
+      environment:
+        type: string
+    executor: aws-cli/default
+    steps:
+      - checkout
+      - aws-cli/setup:
+          region: $AWS_DEFAULT_REGION
+      - run:
+          name: Prove this job is isolated to << parameters.environment >>
+          command: |
+            ENV="<< parameters.environment >>"
+            ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+            BUCKET="${S3_BUCKET:-secure-orders-demo-${ACCOUNT_ID}-${ENV}}"
+            echo "IAM identity: $(aws sts get-caller-identity --query Arn --output text)"
+            echo "Target bucket: ${BUCKET}"
+            if [ "${ENV}" = "staging" ] && echo "${BUCKET}" | grep -q prod; then
+              echo "FAIL: staging must not deploy to a prod bucket"
+              exit 1
+            fi
+            if [ "${ENV}" = "prod" ] && echo "${BUCKET}" | grep -q staging; then
+              echo "FAIL: production must not deploy to a staging bucket"
+              exit 1
+            fi
+            echo "PASS: ${ENV} is only writing to its own bucket"
+      - run:
+          name: Deploy to << parameters.environment >>
+          command: |
+            REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+            ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+            ENV="<< parameters.environment >>"
+            BUCKET="${S3_BUCKET:-secure-orders-demo-${ACCOUNT_ID}-${ENV}}"
+            sed "s/ENVIRONMENT/${ENV}/" index.html > /tmp/index.html
+            aws s3api head-bucket --bucket "${BUCKET}" 2>/dev/null || \
+              aws s3 mb "s3://${BUCKET}" --region "${REGION}"
+            aws s3 cp /tmp/index.html "s3://${BUCKET}/index.html"
+            echo "Uploaded ${ENV} to s3://${BUCKET}/index.html"
+
+workflows:
+  build-and-deploy:
+    jobs:
+      - test
+      - deploy:
+          name: deploy-staging
+          environment: staging
+          context: aws-staging
+          requires:
+            - test
+      - hold-production:
+          type: approval
+          requires:
+            - deploy-staging
+      - deploy:
+          name: deploy-production
+          environment: prod
+          context: aws-prod
+          requires:
+            - hold-production
+ 
