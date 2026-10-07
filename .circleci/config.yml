@@ -49,6 +49,13 @@ jobs:
               aws s3 mb "s3://${BUCKET}" --region "${REGION}"
             aws s3 cp /tmp/index.html "s3://${BUCKET}/index.html"
             echo "Uploaded ${ENV} to s3://${BUCKET}/index.html"
+      - run:
+          name: Record the deploy
+          command: |
+            circleci run release log \
+              --environment-name=<< parameters.environment >> \
+              --component-name=secure-orders \
+              --target-version="${CIRCLE_SHA1:0:7}"
 
 workflows:
   build-and-deploy:
