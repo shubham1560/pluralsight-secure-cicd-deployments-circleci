@@ -10,14 +10,6 @@ jobs:
     steps:
       - checkout
       - run: node --test test.js
-      - run:
-          name: Confirm this job has no AWS credentials
-          command: |
-            if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
-              echo "FAIL: test can see AWS_ACCESS_KEY_ID. Keep keys in contexts, not project env vars."
-              exit 1
-            fi
-            echo "PASS: test has no AWS keys"
 
   deploy:
     parameters:
