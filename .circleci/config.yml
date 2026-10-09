@@ -11,13 +11,30 @@ jobs:
       - checkout
       - run: node --test test.js
 
+  build:
+    docker:
+      - image: cimg/node:20.11
+    steps:
+      - checkout
+      - run:
+          name: Package the site once
+          command: |
+            mkdir -p dist
+            cp index.html dist/
+            echo "${CIRCLE_SHA1:0:7}" > dist/VERSION
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+
   deploy:
     parameters:
       environment:
         type: string
     executor: aws-cli/default
     steps:
-      - checkout
+      - attach_workspace:
+          at: .
       - aws-cli/setup:
           region: $AWS_DEFAULT_REGION
       - run:
@@ -44,7 +61,8 @@ jobs:
             ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
             ENV="<< parameters.environment >>"
             BUCKET="${S3_BUCKET:-secure-orders-demo-${ACCOUNT_ID}-${ENV}}"
-            sed "s/ENVIRONMENT/${ENV}/" index.html > /tmp/index.html
+            echo "Deploying build $(cat dist/VERSION) to ${ENV}"
+            sed "s/ENVIRONMENT/${ENV}/" dist/index.html > /tmp/index.html
             aws s3api head-bucket --bucket "${BUCKET}" 2>/dev/null || \
               aws s3 mb "s3://${BUCKET}" --region "${REGION}"
             aws s3 cp /tmp/index.html "s3://${BUCKET}/index.html"
@@ -55,18 +73,24 @@ jobs:
             circleci run release log \
               --environment-name=<< parameters.environment >> \
               --component-name=secure-orders \
-              --target-version="${CIRCLE_SHA1:0:7}"
+              --target-version="$(cat dist/VERSION)"
 
 workflows:
   build-and-deploy:
     jobs:
       - test
+      - build:
+          requires:
+            - test
       - deploy:
           name: deploy-staging
           environment: staging
           context: aws-staging
           requires:
-            - test
+            - build
+          filters:
+            branches:
+              only: main
       - hold-production:
           type: approval
           requires:
